@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#222222">
+    <title>Photo Editor - Android Friendly</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 10px; background: #1a1a1a; color: #eee; text-align: center; }
+        h1 { font-size: 1.5rem; margin: 10px 0; }
+        #canvas { border: 3px solid #444; max-width: 100%; height: auto; background: #fff; touch-action: none; }
+        .controls { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 15px 0; }
+        button { padding: 12px 16px; font-size: 1rem; border: none; border-radius: 8px; background: #444; color: #fff; cursor: pointer; }
+        button:active { background: #666; }
+        .toolbar { background: #2a2a2a; padding: 12px; border-radius: 12px; }
+        input[type="range"] { width: 120px; }
+        .mode-active { background: #0a0; }
+    </style>
+</head>
+<body>
+    <h1>📸 Photo Editor (Android PWA)</h1>
+    <input type="file" id="upload" accept="image/*" style="margin: 10px;">
+    <div class="controls toolbar">
+        <button onclick="setTool('draw')">✏️ Draw</button>
+        <button onclick="setTool('erase')">🧼 Erase</button>
+        <button onclick="setTool('liquify')" id="liquifyBtn">🌊 Reshape</button>
+        <button onclick="applyFilter('grayscale')">B&W</button>
+        <button onclick="applyFilter('sepia')">Sepia</button>
+        <button onclick="rotateImage()">↻ Rotate</button>
+        <button onclick="resetImage()">Reset</button>
+        <button onclick="saveImage()">💾 Save</button>
+        <br><br>
+        <label>Brush: <input type="range" id="brushSize" min="5" max="80" value="25"></label>
+        <label>Strength: <input type="range" id="liquifyStrength" min="5" max="40" value="20"></label>
+    </div>
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <script>
+        // Full improved code with touch support and PWA ready
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        let isDrawing = false;
+        let lastX = 0, lastY = 0;
+        let currentTool = 'draw';
+        let originalImageData = null;
+        let img = new Image();
+
+        // Upload
+        document.getElementById('upload').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                img.onload = function() {
+                    const ratio = Math.min(800 / img.width, 600 / img.height, 1);
+                    canvas.width = img.width * ratio;
+                    canvas.height = img.height * ratio;
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Touch + Mouse support
+        function getPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            if (e.touches) {
+                return { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+            }
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        canvas.addEventListener('mousedown', start);
+        canvas.addEventListener('mousemove', move);
+        canvas.addEventListener('mouseup', end);
+        canvas.addEventListener('touchstart', start);
+        canvas.addEventListener('touchmove', move);
+        canvas.addEventListener('touchend', end);
+
+        function start(e) {
+            e.preventDefault();
+            isDrawing = true;
+            const pos = getPos(e);
+            lastX = pos.x; lastY = pos.y;
+        }
+
+        function move(e) {
+            if (!isDrawing) return;
+            e.preventDefault();
+            const pos = getPos(e);
+            const brushSize = parseInt(document.getElementById('brushSize').value);
+            if (currentTool === 'liquify') {
+                liquify(pos.x, pos.y, brushSize);
+            } else {
+                ctx.lineJoin = 'round';
+                ctx.lineCap = 'round';
+                ctx.lineWidth = brushSize;
+                ctx.globalCompositeOperation = (currentTool === 'erase') ? 'destination-out' : 'source-over';
+                if (currentTool !== 'erase') ctx.strokeStyle = '#ff0000';
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(pos.x, pos.y);
+                ctx.stroke();
+            }
+            lastX = pos.x; lastY = pos.y;
+        }
+
+        function end(e) {
+            e.preventDefault();
+            isDrawing = false;
+            ctx.globalCompositeOperation = 'source-over';
+            if (originalImageData) originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        }
+
+        function setTool(tool) {
+            currentTool = tool;
+            document.getElementById('liquifyBtn').classList.toggle('mode-active', tool === 'liquify');
+        }
+
+        function liquify(x, y, size) {
+            const strength = parseInt(document.getElementById('liquifyStrength').value) / 12;
+            const dx = (x - lastX) * strength;
+            const dy = (y - lastY) * strength;
+            const half = Math.floor(size / 2);
+            const startX = Math.max(0, Math.floor(x - half));
+            const startY = Math.max(0, Math.floor(y - half));
+            const w = Math.min(size, canvas.width - startX);
+            const h = Math.min(size, canvas.height - startY);
+            if (w <= 0 || h <= 0) return;
+            const imageData = ctx.getImageData(startX, startY, w, h);
+            const data = imageData.data;
+            for (let row = 0; row < h; row++) {
+                for (let col = 0; col < w; col++) {
+                    const dist = Math.sqrt(Math.pow(col - half, 2) + Math.pow(row - half, 2));
+                    if (dist > half) continue;
+                    const intensity = Math.pow((half - dist) / half, 2.5);
+                    const fromX = Math.floor(col - dx * intensity);
+                    const fromY = Math.floor(row - dy * intensity);
+                    if (fromX < 0 || fromX >= w || fromY < 0 || fromY >= h) continue;
+                    const srcIdx = (fromY * w + fromX) * 4;
+                    const dstIdx = (row * w + col) * 4;
+                    data[dstIdx] = data[srcIdx];
+                    data[dstIdx+1] = data[srcIdx+1];
+                    data[dstIdx+2] = data[srcIdx+2];
+                    data[dstIdx+3] = data[srcIdx+3];
+                }
+            }
+            ctx.putImageData(imageData, startX, startY);
+        }
+
+        function applyFilter(type) {
+            if (!originalImageData) return;
+            ctx.putImageData(originalImageData, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                let r = data[i], g = data[i+1], b = data[i+2];
+                if (type === 'grayscale') {
+                    const avg = (r + g + b) / 3;
+                    data[i] = data[i+1] = data[i+2] = avg;
+                } else if (type === 'sepia') {
+                    data[i] = Math.min(255, r*0.393 + g*0.769 + b*0.189);
+                    data[i+1] = Math.min(255, r*0.349 + g*0.686 + b*0.168);
+                    data[i+2] = Math.min(255, r*0.272 + g*0.534 + b*0.131);
+                }
+            }
+            ctx.putImageData(imageData, 0, 0);
+            originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        }
+
+        function rotateImage() {
+            if (!originalImageData) return;
+            const temp = document.createElement('canvas');
+            const tctx = temp.getContext('2d');
+            temp.width = canvas.height; temp.height = canvas.width;
+            tctx.translate(temp.width/2, temp.height/2);
+            tctx.rotate(Math.PI / 2);
+            tctx.drawImage(canvas, -canvas.width/2, -canvas.height/2);
+            canvas.width = temp.width; canvas.height = temp.height;
+            ctx.drawImage(temp, 0, 0);
+            originalImageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        }
+
+        function resetImage() {
+            if (originalImageData) ctx.putImageData(originalImageData, 0, 0);
+        }
+
+        function saveImage() {
+            const link = document.createElement('a');
+            link.download = 'edited-photo.png';
+            link.href = canvas.toDataURL('image/png');
+            link.click();
+        }
+
+        // PWA: Register service worker
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('service-worker.js').then(reg => console.log('SW registered')).catch(err => console.log('SW failed'));
+            });
+        }
+    </script>
+</body>
+</html>
